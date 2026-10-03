@@ -15,6 +15,7 @@ a real embedding model after your pytest tests pass.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Protocol
 
 
@@ -139,7 +140,26 @@ def build_search_text(document: dict[str, Any]) -> str:
     Embedding only the title may lose important meaning. Embedding title,
     category, summary, and tags gives the model more context.
     """
-    raise NotImplementedError("TODO: Build searchable text from document fields.")
+    parts = [
+        str(document["title"]).strip(),
+        str(document["category"]).strip(),
+        str(document["summary"]).strip(),
+    ]
+
+    tags = document.get("tags", [])
+
+    if isinstance(tags, str):
+        parts.append(tags.strip())
+    elif tags:
+        parts.extend(str(tag).strip() for tag in tags)
+
+    text = " ".join(" ".join(parts).split())
+
+    if not text:
+        raise ValueError("Document search text must not be empty.")
+
+    return text
+
 
 
 def prepare_documents(raw_documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -158,7 +178,25 @@ def prepare_documents(raw_documents: list[dict[str, Any]]) -> list[dict[str, Any
     - ValueError if a required field is missing.
     - ValueError if raw_documents is empty.
     """
-    raise NotImplementedError("TODO: Validate and prepare documents.")
+    if not isinstance(raw_documents, list) or not raw_documents:
+        raise ValueError("raw_documents must be a non-empty list.")
+
+    prepared = []
+
+    for document in raw_documents:
+        if not isinstance(document, dict):
+            raise ValueError("Each document must be a dictionary.")
+
+        for field in REQUIRED_DOCUMENT_FIELDS:
+            if field not in document:
+                raise ValueError(f"Missing required field: {field}")
+
+        new_document = deepcopy(document)
+        new_document["text"] = build_search_text(new_document)
+        prepared.append(new_document)
+
+    return prepared
+
 
 
 def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
@@ -174,7 +212,20 @@ def cosine_similarity(vector_a: list[float], vector_b: list[float]) -> float:
 
     Do not use numpy for this lab. Implement the math with basic Python.
     """
-    raise NotImplementedError("TODO: Compute cosine similarity.")
+    if len(vector_a) != len(vector_b):
+        raise ValueError("Vectors must have the same dimensions.")
+
+    dot_product = sum(a * b for a, b in zip(vector_a, vector_b))
+    magnitude_a = math.sqrt(sum(a * a for a in vector_a))
+    magnitude_b = math.sqrt(sum(b * b for b in vector_b))
+
+    if magnitude_a == 0 or magnitude_b == 0:
+        return 0.0
+
+    score = dot_product / (magnitude_a * magnitude_b)
+
+    # Limit floating-point rounding errors to the valid range.
+    return float(max(-1.0, min(1.0, score)))
 
 
 def embed_documents(
@@ -193,8 +244,14 @@ def embed_documents(
 
     Do not mutate the input documents.
     """
-    raise NotImplementedError("TODO: Embed each prepared document.")
+    embedded = []
 
+    for document in prepared_documents:
+        new_document = deepcopy(document)
+        new_document["embedding"] = embedding_model.embed(document["text"])
+        embedded.append(new_document)
+
+    return embedded
 
 def rank_documents(
     query: str,
@@ -225,7 +282,30 @@ def rank_documents(
             "score": 0.87
         }
     """
-    raise NotImplementedError("TODO: Rank documents by query similarity.")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("Query must be a non-empty string.")
+
+    if (
+        not isinstance(top_k, int)
+        or isinstance(top_k, bool)
+        or top_k <= 0
+    ):
+        raise ValueError("top_k must be a positive integer.")
+
+    query_embedding = embedding_model.embed(query)
+    results = []
+    for document in embedded_documents:
+        result = deepcopy(document)
+        result["score"] = cosine_similarity(
+            query_embedding,
+            document["embedding"],
+        )
+        results.append(result)
+
+    results.sort(key=lambda result: result["score"], reverse=True)
+
+    return results[:top_k]
+
 
 
 def semantic_search(
@@ -247,7 +327,15 @@ def semantic_search(
 
     This function should orchestrate the smaller helper functions.
     """
-    raise NotImplementedError("TODO: Run the full semantic search workflow.")
+    prepared = prepare_documents(raw_documents)
+    embedded = embed_documents(prepared, embedding_model)
+
+    return rank_documents(
+        query,
+        embedded,
+        embedding_model,
+        top_k=top_k,
+    )
 
 
 def main() -> None:
